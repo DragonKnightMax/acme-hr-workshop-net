@@ -22,7 +22,8 @@ AnthropicClient client = new(); // reads ANTHROPIC_API_KEY
 List<ToolUnion> tools =
 [
     Def("get_leave_balance", "Get the annual leave balance of the current employee, in working days.", new { }),
-    // TODO (warm-up): add get_public_holidays(state) here and in RunTool below.
+    Def("get_public_holidays", "List 2026 Malaysian public holidays for a state. Supported state codes: SEL, KUL, PNG.",
+        new { state = new { type = "string", description = "State code: SEL, KUL or PNG." } }, "state"),
 ];
 
 var history = new List<MessageParam> { new UserMessageParam { Content = question } };
@@ -64,8 +65,32 @@ Console.WriteLine("Stopped: turn limit reached.");
 static (string Output, bool IsError) RunTool(string name, IReadOnlyDictionary<string, JsonElement> input) => name switch
 {
     "get_leave_balance" => ("""{"entitlement":16,"used":5.5,"pending":2,"available":8.5}""", false),
+    "get_public_holidays" => GetPublicHolidays(input.TryGetValue("state", out var s) && s.ValueKind == JsonValueKind.String ? s.GetString() : null),
     _ => ($"Unknown tool {name}.", true),
 };
+
+// Small fake 2026 list for the warm-up; not an official calendar.
+static (string Output, bool IsError) GetPublicHolidays(string? state)
+{
+    var common = new List<object>
+    {
+        new { date = "2026-01-01", name = "New Year's Day" },
+        new { date = "2026-02-01", name = "Thaipusam" },
+        new { date = "2026-02-17", name = "Chinese New Year" },
+        new { date = "2026-02-18", name = "Chinese New Year (2nd day)" },
+        new { date = "2026-05-01", name = "Labour Day" },
+        new { date = "2026-08-31", name = "National Day" },
+    };
+    var code = state?.Trim().ToUpperInvariant();
+    switch (code)
+    {
+        case "KUL": common.Add(new { date = "2026-02-01", name = "Federal Territory Day" }); break;
+        case "SEL": common.Add(new { date = "2026-12-11", name = "Sultan of Selangor's Birthday" }); break;
+        case "PNG": common.Add(new { date = "2026-07-07", name = "George Town World Heritage City Day" }); break;
+        default: return ($"Unsupported state '{state}'. Use SEL, KUL or PNG.", true);
+    }
+    return (JsonSerializer.Serialize(new { state = code, year = 2026, holidays = common }), false);
+}
 
 static ToolUnion Def(string name, string description, object properties, params string[] required) => new Tool
 {
