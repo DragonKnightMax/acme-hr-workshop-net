@@ -31,19 +31,42 @@ public class HelpdeskAgent(IClaudeChat claude, HelpdeskTools tools, ClaudeOption
                 ? new AssistantMessageParam { Content = turn.Text }
                 : new UserMessageParam { Content = $"<message>{turn.Text}</message>" });
 
-        // TODO (Lab 2): the agent loop. Use Claude Code with the "Finish the agent loop" prompt in PROMPTS.md.
-        // For turn = 1 .. MaxTurns:
-        //   1. Send: Model = options.Model, MaxTokens, System (SystemPrompt with {today}), Tools = HelpdeskTools.Definitions, Messages = history.ToList() (a copy, not the live list).
-        //   2. Add Claude's own turn to history:  new AssistantMessageParam { Content = res.Content.Select(b => new ContentBlockParam(b.Json)).ToList() }
-        //   3. If res.StopReason != StopReason.ToolUse: return the text (TextOf(res)), the tool calls, turns, res.StopReason?.Raw() ?? "unknown", tokens.
-        //   4. Else for every tool_use block (block.TryPickToolUse(out var call)): run tools.RunAsync(...),
-        //      log it, and add  new ToolResultBlockParam(call.ID) { Content = outcome.Json, IsError = outcome.IsError }.
-        //      One tool_result for EVERY tool_use, even when the tool fails. If tools.RunAsync throws, catch it
-        //      and add an error tool_result (IsError = true): a tool_use without its result makes the API reject the next call.
-        //   5. Add all results as ONE user message, then loop.
-        // After MaxTurns: return a polite "an HR officer will follow up" reply with StopReason "turn_limit".
-        await Task.CompletedTask;
-        throw new NotImplementedException("Lab 2: complete the agent loop in HelpdeskAgent.RunAsync");
+        var system = SystemPrompt.Replace("{today}", DateTime.Today.ToString("yyyy-MM-dd"));
+        var calls = new List<ToolCallLog>();
+        long inTokens = 0, outTokens = 0;
+
+        for (var turn = 1; turn <= MaxTurns; turn++)
+        {
+            var res = await claude.SendAsync(new MessageCreateParams
+            {
+                Model = options.Model,
+                MaxTokens = 1024,
+                System = system,
+                Tools = HelpdeskTools.Definitions.ToList(),
+                Messages = history.ToList(), // a copy: the live list keeps growing after this call
+            }, ct);
+            inTokens += res.Usage.InputTokens;
+            outTokens += res.Usage.OutputTokens;
+            history.Add(new AssistantMessageParam { Content = res.Content.Select(b => new ContentBlockParam(b.Json)).ToList() });
+
+            if (res.StopReason != StopReason.ToolUse)
+                return new ChatReply(TextOf(res), calls, turn, res.StopReason?.Raw() ?? "unknown", inTokens, outTokens);
+
+            // One tool_result for every tool_use, even on failure, or the API rejects the next call.
+            var results = new List<ContentBlockParam>();
+            foreach (var b in res.Content)
+            {
+                if (!b.TryPickToolUse(out var call)) continue;
+                ToolOutcome outcome;
+                try { outcome = await tools.RunAsync(call.Name, call.Input, employeeId); }
+                catch (Exception e) { outcome = new(JsonSerializer.Serialize(new { error = $"Tool failed ({e.GetType().Name})." }), true); }
+                calls.Add(new ToolCallLog(call.Name, JsonSerializer.Serialize(call.Input), outcome.Json, outcome.IsError));
+                results.Add(new ToolResultBlockParam(call.ID) { Content = outcome.Json, IsError = outcome.IsError });
+            }
+            history.Add(new UserMessageParam { Content = results });
+        }
+
+        return new ChatReply("I could not finish this request. An HR officer will follow up with you.", calls, MaxTurns, "turn_limit", inTokens, outTokens);
     }
 
     static string TextOf(Message m) =>
