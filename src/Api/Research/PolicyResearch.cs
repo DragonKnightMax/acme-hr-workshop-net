@@ -87,15 +87,37 @@ public class PolicyResearch(IClaudeChat claude, AcmeDb db, ClaudeOptions options
     /// <summary>One worker: its own conversation, only the two policy tools, its own turn limit.</summary>
     async Task<string> RunWorker(string subtopic, string name, CancellationToken ct)
     {
-        // TODO (Lab 3): one worker = a separate Claude conversation. Use the "Finish the worker" prompt in PROMPTS.md.
-        // - Start a NEW history with only the subtopic (the worker sees nothing else).
-        // - Loop up to MaxTurnsPerWorker: send with WorkerPrompt and WorkerTools only; stop early if _tokens >= TokenBudget.
-        // - Count tokens: add res.Usage.InputTokens + OutputTokens to _tokens and to this worker's totals.
-        // - Run search_policies / read_policy with SearchAsync / ReadAsync and return one tool_result per tool_use.
-        // - Return the worker's final text (findings with policy ids).
-        // - Always record usage: _usage.Add(new AgentUsage(name, turns, inTok, outTok)) — use try/finally.
-        await Task.CompletedTask;
-        throw new NotImplementedException("Lab 3: implement RunWorker in PolicyResearch.cs");
+        var history = new List<MessageParam> { new UserMessageParam { Content = subtopic } };
+        int turns = 0; long inTok = 0, outTok = 0;
+        try
+        {
+            while (true)
+            {
+                if (turns >= MaxTurnsPerWorker) return $"Stopped: {name} hit the turn limit ({MaxTurnsPerWorker}) before finishing.";
+                if (_tokens >= TokenBudget) return $"Stopped: token budget ({TokenBudget}) used up during {name}.";
+                turns++;
+                var res = await claude.SendAsync(new MessageCreateParams { Model = options.Model, MaxTokens = 1500, System = WorkerPrompt, Tools = WorkerTools, Messages = history.ToList() }, ct);
+                inTok += res.Usage.InputTokens; outTok += res.Usage.OutputTokens; _tokens += res.Usage.InputTokens + res.Usage.OutputTokens;
+                history.Add(new AssistantMessageParam { Content = res.Content.Select(b => new ContentBlockParam(b.Json)).ToList() });
+
+                if (res.StopReason != StopReason.ToolUse) return TextOf(res);
+
+                var results = new List<ContentBlockParam>();
+                foreach (var block in res.Content)
+                {
+                    if (!block.TryPickToolUse(out var call)) continue;
+                    var (output, isError) = call.Name switch
+                    {
+                        "search_policies" => (await SearchAsync(Str(call.Input, "query")), false),
+                        "read_policy" => (await ReadAsync(Str(call.Input, "id")), false),
+                        _ => ($"Unknown tool {call.Name}. Use search_policies or read_policy.", true),
+                    };
+                    results.Add(new ToolResultBlockParam(call.ID) { Content = output, IsError = isError });
+                }
+                history.Add(new UserMessageParam { Content = results });
+            }
+        }
+        finally { _usage.Add(new AgentUsage(name, turns, inTok, outTok)); }
     }
 
     async Task<string> SearchAsync(string query)
