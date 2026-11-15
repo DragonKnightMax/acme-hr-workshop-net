@@ -1,3 +1,5 @@
+using System.ComponentModel.DataAnnotations.Schema;
+
 namespace Api.Models;
 
 public enum HalfDay { None, AM, PM }
@@ -22,6 +24,9 @@ public class LeaveRequest
     public HalfDay HalfDay { get; set; } = HalfDay.None;
     public LeaveStatus Status { get; set; } = LeaveStatus.Pending;
     public string Reason { get; set; } = "";
+
+    /// <summary>Working days (0.5 for a half day). Computed, not stored.</summary>
+    [NotMapped] public decimal Days => Api.Services.LeaveService.DaysOf(this);
 }
 
 public class Policy

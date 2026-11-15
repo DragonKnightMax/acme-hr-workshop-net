@@ -1,3 +1,4 @@
+using System.ComponentModel.DataAnnotations;
 using Api.Auth;
 using Api.Data;
 using Api.Services;
@@ -51,10 +52,30 @@ public class LeaveController(LeaveService leave, AccessService access) : Control
         return Ok((await leave.ListAsync(null)).Where(r => visible is null || visible.Contains(r.EmployeeId)));
     }
 
-    // TODO (Lab 1): POST /leave, POST /leave/{id}/approve, POST /leave/{id}/reject
-    // The employee is the signed-in user (User.EmployeeId()), never an id from the body.
-    // Approve and reject only when access.CanDecideLeaveAsync(User, request) is true, otherwise 403.
+    /// <summary>Create leave for the signed-in employee. Any employeeId in the body is ignored.</summary>
+    [HttpPost]
+    public async Task<IActionResult> Create(CreateLeave body)
+    {
+        var (r, error) = await leave.CreateAsync(User.EmployeeId(), body.StartDate!.Value, body.EndDate!.Value, body.HalfDay, body.Reason);
+        return r is null ? Problem(statusCode: 400, title: error) : Created($"/leave/{r.Id}", r);
+    }
+
+    [HttpPost("{id:int}/approve")]
+    public Task<IActionResult> Approve(int id) => Decide(id, approve: true);
+
+    [HttpPost("{id:int}/reject")]
+    public Task<IActionResult> Reject(int id) => Decide(id, approve: false);
+
+    async Task<IActionResult> Decide(int id, bool approve)
+    {
+        if (await leave.FindAsync(id) is not { } r) return Problem(statusCode: 404, title: $"Leave request {id} not found");
+        if (!await access.CanDecideLeaveAsync(User, r)) return Problem(statusCode: 403, title: "Only the requester's manager or HR can decide this request");
+        return await leave.DecideAsync(r, approve) is { } error ? Problem(statusCode: 400, title: error) : Ok(r);
+    }
 }
+
+/// <summary>Dates are nullable so a missing date fails validation (400) instead of becoming 0001-01-01.</summary>
+public record CreateLeave([Required] DateOnly? StartDate, [Required] DateOnly? EndDate, Api.Models.HalfDay HalfDay = Api.Models.HalfDay.None, string? Reason = null);
 
 [ApiController, Route("policies")]
 public class PoliciesController(AcmeDb db) : ControllerBase
