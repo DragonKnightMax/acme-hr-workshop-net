@@ -17,3 +17,7 @@ input, select, textarea { padding: 8px; border: 2px solid var(--ink); border-rad
 .hint { font-size: 0.9em; opacity: 0.8; }
 .whoami { text-align: right; margin-bottom: 12px; }
 button.link { background: none; border: none; padding: 0; color: var(--ink); text-decoration: underline; font-weight: 600; }
+.calendar { table-layout: fixed; }
+.calendar td { vertical-align: top; height: 84px; font-size: 0.85em; border: 1px solid #ddd; }
+.calendar .day { font-weight: 700; }
+.calendar .pending { color: #888; }
