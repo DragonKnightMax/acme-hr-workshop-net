@@ -13,6 +13,7 @@ public class DocumentExtractor(IClaudeChat claude, ClaudeOptions options)
         Extract the data from this Acme HR document. It is a medical certificate (MC), an expense claim, or something else (kind "other").
         Dates as yyyy-MM-dd. Amounts as numbers without currency symbols. Use null for the part that does not apply.
         Copy values exactly as written. Do not fix or invent numbers.
+        clinic: the clinic name as printed, without address or phone.
         """;
 
     /// <summary>The JSON schema Claude must follow (structured outputs).</summary>
@@ -68,24 +69,45 @@ public class DocumentExtractor(IClaudeChat claude, ClaudeOptions options)
     {
         var history = new List<MessageParam> { DocumentMessage(pdf) };
 
-        // TODO (Lab 6): this first version trusts whatever comes back. Make it safe:
-        //  1. Send OutputConfig = new OutputConfig { Format = new JsonOutputFormat { Schema = Schema } }.
-        //  2. Handle a stop_reason other than end_turn: return NeedsReview.
-        //  3. Parse the text into Extraction (catch JsonException) and run DocumentValidator.Check.
-        //  4. If there are problems, retry ONCE: add Claude's answer and the exact problems to history.
-        //     Say "correct only reading mistakes; if the document itself is wrong, keep its values as written".
-        //     Otherwise Claude may "fix" a wrong document (samples 08, 10, 17) so the checks pass.
-        //  5. Still failing, or kind "other": return NeedsReview with the problems. Max MaxAttempts calls.
-        var res = await claude.SendAsync(new MessageCreateParams
+        Extraction? data = null;
+        List<string> problems = [];
+        for (var attempt = 1; attempt <= MaxAttempts; attempt++)
         {
-            Model = options.Model,
-            MaxTokens = 1024,
-            System = Prompt,
-            Messages = history.ToList(),
-        }, ct);
+            var res = await claude.SendAsync(new MessageCreateParams
+            {
+                Model = options.Model,
+                MaxTokens = 1024,
+                System = Prompt,
+                Messages = history.ToList(),
+                OutputConfig = new OutputConfig { Format = new JsonOutputFormat { Schema = Schema } },
+            }, ct);
 
-        var text = string.Concat(res.Content.Select(b => b.TryPickText(out var t) ? t.Text : ""));
-        var data = JsonSerializer.Deserialize<Extraction>(text);
-        return new ExtractionResult(data, DocumentStatus.Valid, [], 1);
+            // Cut off or refused: the JSON may be partial, so a person checks it.
+            if (res.StopReason != StopReason.EndTurn)
+                return new ExtractionResult(null, DocumentStatus.NeedsReview, [$"stop reason was {res.StopReason?.Raw() ?? "unknown"}"], attempt);
+
+            var text = string.Concat(res.Content.Select(b => b.TryPickText(out var t) ? t.Text : ""));
+            try
+            {
+                data = JsonSerializer.Deserialize<Extraction>(text);
+                problems = data is null ? ["the answer was empty"] : DocumentValidator.Check(data);
+            }
+            catch (JsonException)
+            {
+                data = null;
+                problems = ["the answer was not valid JSON for the schema"];
+            }
+
+            if (problems.Count == 0) return new ExtractionResult(data, DocumentStatus.Valid, [], attempt);
+            if (data?.Kind == "other" || attempt == MaxAttempts) return new ExtractionResult(data, DocumentStatus.NeedsReview, problems, attempt);
+
+            history.Add(new AssistantMessageParam { Content = res.Content.Select(b => new ContentBlockParam(b.Json)).ToList() });
+            history.Add(new UserMessageParam
+            {
+                Content = "Your answer has these problems:\n- " + string.Join("\n- ", problems) +
+                    "\nRead the document again and correct only reading mistakes. If the document itself is wrong, keep its values as written. Return the full JSON again.",
+            });
+        }
+        return new ExtractionResult(data, DocumentStatus.NeedsReview, problems, MaxAttempts);
     }
 }

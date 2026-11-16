@@ -61,6 +61,28 @@ public class DocumentExtractorTests
     }
 
     [Fact]
+    public async Task Max_tokens_goes_to_NeedsReview_without_retry()
+    {
+        var fake = new FakeClaude(FakeClaude.Text(GoodMc, "max_tokens"), FakeClaude.Text(GoodMc));
+        var r = await new DocumentExtractor(fake, Opts).ExtractAsync(Pdf);
+        Assert.Equal(DocumentStatus.NeedsReview, r.Status);
+        Assert.Single(fake.Requests);
+        Assert.Contains(r.Problems, p => p.Contains("max_tokens"));
+    }
+
+    [Fact]
+    public async Task Retry_message_lists_the_problems_and_says_keep_a_wrong_document_as_written()
+    {
+        var fake = new FakeClaude(FakeClaude.Text(BadMc), FakeClaude.Text(GoodMc));
+        await new DocumentExtractor(fake, Opts).ExtractAsync(Pdf);
+        Assert.Equal("assistant", FakeClaude.MessageJson(fake.Requests[1], 1).GetProperty("role").GetString());
+        var retry = FakeClaude.MessageJson(fake.Requests[1], 2).GetProperty("content").GetString()!;
+        Assert.Contains("days is 3 but the date range is 2 days", retry);
+        Assert.Contains("correct only reading mistakes", retry);
+        Assert.Contains("If the document itself is wrong, keep its values as written", retry);
+    }
+
+    [Fact]
     public async Task Valid_claim_passes()
     {
         var r = await new DocumentExtractor(new FakeClaude(FakeClaude.Text(GoodClaim)), Opts).ExtractAsync(Pdf);
