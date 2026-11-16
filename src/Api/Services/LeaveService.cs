@@ -28,11 +28,12 @@ public class LeaveService(AcmeDb db)
     }
 
     /// <summary>Days taken this year, for the employee summary card.</summary>
-    public async Task<decimal> DaysTakenThisYearAsync(int employeeId)
+    public async Task<decimal?> DaysTakenThisYearAsync(int employeeId)
     {
+        if (await db.Employees.FindAsync(employeeId) is null) return null;
         var year = DateTime.UtcNow.Year;
         var requests = await db.LeaveRequests
-            .Where(r => r.EmployeeId == employeeId && r.StartDate.Year == year)
+            .Where(r => r.EmployeeId == employeeId && r.StartDate.Year == year && r.Status == LeaveStatus.Approved)
             .ToListAsync();
         return requests.Sum(DaysOf);
     }
