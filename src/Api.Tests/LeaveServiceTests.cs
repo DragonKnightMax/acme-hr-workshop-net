@@ -57,4 +57,24 @@ public class LeaveServiceTests
     [Fact]
     public void Rejected_leave_days_still_computed() =>
         Assert.Equal(1, LeaveService.DaysOf(new LeaveRequest { StartDate = new(2026, 11, 18), EndDate = new(2026, 11, 18), Status = LeaveStatus.Rejected }));
+
+    // One working day this year for employee 1 (no seeded leave), with the given status.
+    static async Task<decimal?> DaysTakenWith(LeaveStatus status)
+    {
+        using var db = TestDb.Create();
+        var day = new DateOnly(DateTime.UtcNow.Year, 3, 1);
+        while (!WorkingDays.IsWorkingDay(day)) day = day.AddDays(1);
+        db.LeaveRequests.Add(new LeaveRequest { EmployeeId = 1, StartDate = day, EndDate = day, Status = status });
+        await db.SaveChangesAsync();
+        return await new LeaveService(db).DaysTakenThisYearAsync(1);
+    }
+
+    [Fact]
+    public async Task Days_taken_counts_approved() => Assert.Equal(1, await DaysTakenWith(LeaveStatus.Approved));
+
+    [Fact]
+    public async Task Days_taken_ignores_pending() => Assert.Equal(0, await DaysTakenWith(LeaveStatus.Pending));
+
+    [Fact]
+    public async Task Days_taken_ignores_rejected() => Assert.Equal(0, await DaysTakenWith(LeaveStatus.Rejected));
 }

@@ -208,6 +208,32 @@ public class AuthApiTests(ApiFactory api) : IClassFixture<ApiFactory>
     }
 
     [Fact]
+    public async Task Employee_cannot_see_someone_elses_summary()
+    {
+        var http = await api.SignedInAs(People.Farah);
+        Assert.Equal(HttpStatusCode.OK, (await http.GetAsync("/employees/6/summary")).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await http.GetAsync("/employees/7/summary")).StatusCode);
+    }
+
+    [Fact]
+    public async Task Summary_counts_approved_days_including_half_days()
+    {
+        var farah = await api.SignedInAs(People.Farah);
+        Assert.Equal(3m, (await farah.GetFromJsonAsync<SummaryRow>("/employees/6/summary"))!.DaysTakenThisYear); // seed: Mon-Wed approved
+
+        var hr = await api.SignedInAs(People.Dina);
+        Assert.Equal(0.5m, (await hr.GetFromJsonAsync<SummaryRow>("/employees/7/summary"))!.DaysTakenThisYear); // seed: approved half day
+        Assert.Equal(0m, (await hr.GetFromJsonAsync<SummaryRow>("/employees/8/summary"))!.DaysTakenThisYear); // seed: pending only
+    }
+
+    [Fact]
+    public async Task Summary_for_unknown_employee_is_404()
+    {
+        var hr = await api.SignedInAs(People.Dina); // HR may see everyone, so the access check doesn't hide the 404
+        Assert.Equal(HttpStatusCode.NotFound, (await hr.GetAsync("/employees/999/summary")).StatusCode);
+    }
+
+    [Fact]
     public async Task Manager_sees_their_team_leave_only()
     {
         var http = await api.SignedInAs(People.Aina);
@@ -218,4 +244,5 @@ public class AuthApiTests(ApiFactory api) : IClassFixture<ApiFactory>
 
     record MeResponse(int Id, string Email, string[] Roles);
     record LeaveRow(int Id, int EmployeeId);
+    record SummaryRow(int EmployeeId, decimal DaysTakenThisYear);
 }
